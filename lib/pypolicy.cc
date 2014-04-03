@@ -1,11 +1,10 @@
 /***************************************************************************
  *
- * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
- * 2010, 2011 BalaBit IT Ltd, Budapest, Hungary
+ * Copyright (c) 2000-2014 BalaBit IT Ltd, Budapest, Hungary
  *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation.
  *
  * Note that this permission is granted for only version 2 of the GPL.
  *
@@ -20,7 +19,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * Author  : Bazsi
  * Auditor : kisza
@@ -47,14 +46,14 @@
 #include <zorp/pyproxy.h>
 #include <zorp/pysockaddr.h>
 #include <zorp/pyproxygroup.h>
-#include <zorp/pybalance.h>
-#include <zorp/notification.h>
 
 /* for capability management */
 #include <zorp/cap.h>
 
 /* for calling on_reload functions on loaded modules */
 #include <zorp/registry.h>
+
+#include <initializer_list>
 
 ZPolicy *current_policy;
 
@@ -67,15 +66,16 @@ z_verdict_str(ZVerdict verdict)
 {
   static const gchar *verdict_str[] =
   {
-    [ZV_UNSPEC] = "Unspecified",
-    [ZV_ACCEPT] = "Accept data",
-    [ZV_DENY]   = "Deny data",
-    [ZV_REJECT] = "Reject data",
-    [ZV_ABORT]  = "Abort connection",
-    [ZV_DROP]   = "Drop data",
-    [ZV_POLICY] = "Call policy",
-    [ZV_ERROR]  = "Error while processing",
+    "Unspecified",            /* ZV_UNSPEC */
+    "Accept data",            /* ZV_ACCEPT */
+    "Deny data",              /* ZV_DENY   */
+    "Reject data",            /* ZV_REJECT */
+    "Abort connection",       /* ZV_ABORT  */
+    "Drop data",              /* ZV_DROP   */
+    "Call policy",            /* ZV_POLICY */
+    "Error while processing", /* ZV_ERROR  */
   };
+
   if ((guint) verdict <= 7)
     return verdict_str[(guint) verdict];
   return "Unknown";
@@ -272,7 +272,7 @@ z_policy_getattr(PyObject *handler, char *name)
  * The attribute value on success, otherwise NULL
  */
 PyObject *
-z_session_getattr(PyObject *handler, gchar *name)
+z_session_getattr(PyObject *handler, const gchar *name)
 {
   gchar buf[64];
   PyObject *res;
@@ -530,7 +530,7 @@ z_policy_var_parse_uint64(PyObject *val, guint64 *result)
  * The return value of @func
  */
 PyObject *
-z_policy_call_object(PyObject *func, PyObject *args, gchar *session_id)
+z_policy_call_object(PyObject *func, PyObject *args, const gchar *session_id)
 {
   PyObject *res;
 
@@ -584,7 +584,7 @@ z_policy_call_object(PyObject *func, PyObject *args, gchar *session_id)
  * z_policy_call:
  * @handler: Python object whose method shall be called
  * @name: Method name
- * @args: Arguments to pass to the method
+ * @args: Arguments to pass to the method, this object will be consumed (dereferenced) by this function.
  * @called: Flag to store into whether the call succeeded or not (may be NULL)
  * @session_id: Session ID for logging
  *
@@ -595,7 +595,7 @@ z_policy_call_object(PyObject *func, PyObject *args, gchar *session_id)
  * The return value of the call
  */
 PyObject *
-z_policy_call(PyObject *handler, char *name, PyObject *args, gboolean *called, gchar *session_id)
+z_policy_call(PyObject *handler, const char *name, PyObject *args, gboolean *called, const gchar *session_id)
 {
   PyObject *attr;
   PyObject *res;
@@ -647,7 +647,7 @@ z_policy_call(PyObject *handler, char *name, PyObject *args, gboolean *called, g
  * ZV_UNSPEC, ZV_ABORT, ???
  */
 gint
-z_policy_event(PyObject *handler, char *name, PyObject *args, gchar *session_id)
+z_policy_event(PyObject *handler, const char *name, PyObject *args, gchar *session_id)
 {
   PyObject *res;
   unsigned long c_res;
@@ -733,14 +733,13 @@ struct _ZPolicyThread
   PyThreadState *thread;
   /* thread startup synchronization */
   gboolean startable:1, used:1;
-  GMutex   *startable_lock;
-  GCond    *startable_signal;
+  GMutex   startable_lock;
+  GCond    startable_signal;
 };
 
-GStaticPrivate policy_thread = G_STATIC_PRIVATE_INIT;
+GPrivate policy_thread = G_PRIVATE_INIT(NULL);
 
 static gboolean z_policy_purge(ZPolicy *self);
-#include <zorp/coredump.h>
 
 /**
  * z_policy_thread_ready:
@@ -751,10 +750,10 @@ static gboolean z_policy_purge(ZPolicy *self);
 void
 z_policy_thread_ready(ZPolicyThread *self)
 {
-  g_mutex_lock(self->startable_lock);
+  g_mutex_lock(&self->startable_lock);
   self->startable = TRUE;
-  g_cond_signal(self->startable_signal);
-  g_mutex_unlock(self->startable_lock);
+  g_cond_signal(&self->startable_signal);
+  g_mutex_unlock(&self->startable_lock);
 }
 
 /**
@@ -766,12 +765,12 @@ z_policy_thread_ready(ZPolicyThread *self)
 static void
 z_policy_thread_wait(ZPolicyThread *self)
 {
-  g_mutex_lock(self->startable_lock);
+  g_mutex_lock(&self->startable_lock);
   while (!self->startable)
     {
-      g_cond_wait(self->startable_signal, self->startable_lock);
+      g_cond_wait(&self->startable_signal, &self->startable_lock);
     }
-  g_mutex_unlock(self->startable_lock);
+  g_mutex_unlock(&self->startable_lock);
 }
 
 /**
@@ -787,7 +786,7 @@ z_policy_thread_acquire(ZPolicyThread *self)
 {
   z_policy_thread_wait(self);
 
-  g_static_private_set(&policy_thread, self, NULL);
+  g_private_set(&policy_thread, self);
   PyEval_AcquireThread(self->thread);
 
   /* NOTE: this is currently a warning, but it'd probably make sense to
@@ -798,8 +797,8 @@ z_policy_thread_acquire(ZPolicyThread *self)
   if (self->used)
     {
 #if 0
-      z_log(NULL, CORE_ERROR, 0, "Internal error, ZPolicyThread reused, dumping core & continuing;");
-      z_coredump_create();
+      z_log(NULL, CORE_ERROR, 0, "Internal error, ZPolicyThread reused, dumping core;");
+      abort();
 #endif
     }
   self->used = TRUE;
@@ -816,7 +815,7 @@ z_policy_thread_release(ZPolicyThread *self)
 {
   self->used = FALSE;
   PyEval_ReleaseThread(self->thread);
-  g_static_private_set(&policy_thread, NULL, NULL);
+  g_private_set(&policy_thread, NULL);
 }
 
 /**
@@ -832,7 +831,7 @@ z_policy_thread_release(ZPolicyThread *self)
 ZPolicyThread *
 z_policy_thread_self(void)
 {
-  return g_static_private_get(&policy_thread);
+  return static_cast<ZPolicyThread *>(g_private_get(&policy_thread));
 }
 
 /**
@@ -868,8 +867,8 @@ z_policy_thread_new(ZPolicy *policy)
 
   /* NOTE: requires the interpreter lock to be held */
   self->startable = FALSE;
-  self->startable_lock = g_mutex_new();
-  self->startable_signal = g_cond_new();
+  g_mutex_init(&self->startable_lock);
+  g_cond_init(&self->startable_signal);
 
   self->policy = z_policy_ref(policy);
   if (policy->main_thread)
@@ -920,8 +919,8 @@ z_policy_thread_destroy(ZPolicyThread *self)
       Py_EndInterpreter(self->thread);
       z_python_unlock();
     }
-  g_mutex_free(self->startable_lock);
-  g_cond_free(self->startable_signal);
+  g_mutex_clear(&self->startable_lock);
+  g_cond_clear(&self->startable_signal);
   g_free(self);
 }
 
@@ -1038,10 +1037,26 @@ z_policy_modules_py_init_notify(void)
     z_registry_foreach(registry_types[type], z_policy_module_call_py_init_function, NULL);
 }
 
-void
+static void
 z_policy_zorp_builtin_init(void)
 {
   PyImport_AddModule("Zorp.Builtin");
+}
+
+/**
+ * Modules that are exist in Python and extended from C should be imported.
+ */
+static void
+z_policy_import_extendable_python_modules(void)
+{
+  for (const char *module_name : { "Zorp.Zorp", "Zorp.SockAddr", "Zorp.Stream" } )
+    PyImport_ImportModule(module_name);
+}
+
+static void
+z_policy_forbid_writting_bytecode(void)
+{
+  PyRun_SimpleString("import sys; sys.dont_write_bytecode = True");
 }
 
 /**
@@ -1049,38 +1064,26 @@ z_policy_zorp_builtin_init(void)
  * @self: this
  *
  * 'Boots' a policy:
- * - loads policy.boot (importing necessary modules)
+ * - importing necessary modules
  * - initialises the modules
  *
- * FIXME?: the only check is for the read access on policy.boot
- *          there is no check whether it could be interpreted correctly,
+ * FIXME?:  there is no check whether it could be interpreted correctly,
  *          neither for the modules' initialisations
  *
  * Returns:
- * TRUE if policy.boot exists
+ * TRUE
  */
 gboolean
 z_policy_boot(ZPolicy *self)
 {
   FILE *bootstrap;
 
-  if ((bootstrap = fopen(ZORP_POLICY_BOOT_FILE, "r")) == NULL)
-    {
-      /*LOG
-        This message indicates that the policy.boot file couldn't be opened for
-        reading.
-       */
-      z_log(NULL, CORE_ERROR, 0, "Error opening policy.boot file; file='%s'", ZORP_POLICY_BOOT_FILE);
-      return FALSE;
-    }
-
   z_policy_thread_acquire(self->main_thread);
 
-  PyRun_SimpleFile(bootstrap, ZORP_POLICY_BOOT_FILE);
-  fclose(bootstrap);
+  z_policy_forbid_writting_bytecode();
+  z_policy_import_extendable_python_modules();
 
-  /* PyImport_AddModule("Zorp.Zorp"); */
-
+  z_policy_import_extendable_python_modules();
   z_py_zorp_core_init();
   z_policy_zorp_builtin_init();
   z_policy_struct_module_init();
@@ -1363,7 +1366,7 @@ z_policy_new(const gchar *filename)
 }
 
 void
-z_policy_raise_exception_obj(PyObject *exc, gchar *desc)
+z_policy_raise_exception_obj(PyObject *exc, const gchar *desc)
 {
   PyErr_SetString(exc, desc);
 }
@@ -1376,7 +1379,7 @@ z_policy_raise_exception_obj(PyObject *exc, gchar *desc)
  * Generate a Python exception with the given name and descriptions
  */
 void
-z_policy_raise_exception(gchar *exception_name, gchar *desc)
+z_policy_raise_exception(gchar *exception_name, const gchar *desc)
 {
   PyObject *main_module, *license_exc;
 
